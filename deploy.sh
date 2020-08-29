@@ -30,7 +30,7 @@ echo ${setting} | jq > setting.json
 }
 
 if [ $? -eq 0 ] ; then
-    resources=$(aws cloudformation describe-stack-resources --stack-name Watch | jq .StackResources)
+    resources=$(aws cloudformation describe-stack-resources --stack-name ${StackName} | jq .StackResources)
     length=$(echo ${resources} | jq length)
     
     for i in $(seq 0 $((${length} - 1))) ; do
