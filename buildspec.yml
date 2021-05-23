@@ -1,0 +1,27 @@
+version: 0.2
+run-as: root
+env:
+  git-credential-helper: no
+  # parameter-store:
+  #   key: "value"
+  # secrets-manager:
+  #   key: secret-id:json-key:version-stage:version-id
+  shell: bash
+  variables:
+    NODE_ENV: production
+phases:
+  install:
+    commands:
+      - apt update -y
+      - apt install -y build-essential
+  build:
+    commands:
+      - mkdir build
+      - cd build && g++ ../src/main.cpp -o main
+  post_build:
+    commands:
+      - echo Build completed on $(date)
+artifacts:
+  files:
+    - '**/*'
+  base-directory: build

@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: CICD
+
+# ------------------------------------------------------------#
+# Input Parameters
+# ------------------------------------------------------------#
+Parameters:
+  #Project Name Parameter
+  ProjectPrefix:
+    Type: String
+    Default: ""
+  ArtifactsBucket:
+    Type: String
+    Default: stack-deploy-bucket
+
+# ------------------------------------------------------------#
+# Resource
+# ------------------------------------------------------------#
+Resources:
+  # CodeCommit
+  CodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Sub ${ProjectPrefix}CodeCommit
+      RepositoryDescription: CodeCommit
+
+  # CodeBuild
+  CodeBuild:
+    DependsOn:
+      - CodeBuildRole
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Name: !Sub ${ProjectPrefix}CodeBuild
+      Description: CodeBuild
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:5.0
+        EnvironmentVariables:
+          - Name: Key
+            Type: PLAINTEXT
+            Value: Value
+      Source:
+        BuildSpec: buildspec.yml
+        GitCloneDepth: 1
+        Location: !GetAtt CodeCommit.CloneUrlHttp
+        Type: CODECOMMIT
+      SourceVersion: refs/heads/master
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 480
+
+  # CodePipeline
+  CodePipeline:
+    DependsOn:
+      - CodePipelineRole
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                BranchName: master
+                OutputArtifactFormat: CODE_ZIP
+                PollForSourceChanges: 'false'
+                RepositoryName: !GetAtt CodeCommit.Name
+              InputArtifacts: []
+              RunOrder: 1
+              Namespace: SourceVariables
+              OutputArtifacts:
+                - Name: SourceArtifact
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                BatchEnabled: 'false'
+                ProjectName: CodeBuild
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Namespace: BuildVariables
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              RunOrder: 1
+              Configuration:
+                BucketName: !Sub ${ArtifactsBucket}
+                Extract: true
+                # ObjectKey: ""
+                # KMSEncryptionKeyARN: ""
+                # CannedACL: ""
+                # CacheControl: ""
+              OutputArtifacts: []
+              InputArtifacts:
+                - Name: BuildArtifact
+      ArtifactStore:
+        Type: S3
+        Location: !Sub ${ArtifactsBucket}
+
+  # EventBridge
+  # EventBridge:
+  #   Type: AWS::Events::Rule
+  #   Properties:
+  #     Description: PR Trigger
+  #     Name: !Sub ${CodeBuild}Trigger
+  #     EventPattern: |-
+  #       {
+  #         "source": ["aws.codecommit"],
+  #         "detail-type": ["CodeCommit Pull Request State Change"],
+  #         "detail": {
+  #           "isMerged": [
+  #             "True"
+  #           ],
+  #           "repositoryNames": [
+  #             "CodeCommit"
+  #           ],
+  #           "destinationReference": [
+  #             "refs/heads/master",
+  #             "refs/heads/develop",
+  #           ]
+  #         }
+  #       }
+  #     State: ENABLED
+  #     Targets:
+  #       - Arn: !Sub ${CodeBuild.Arn}
+  #         Id: !Sub ${ProjectPrefix}${CodeBuild}
+  #         RoleArn: !GetAtt CodePipelineRole.Arn
+
+  # IAM
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess
+        - arn:aws:iam::aws:policy/AWSCodeCommitFullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Path: /
+      RoleName: !Sub ${ProjectPrefix}CodeBuildRole
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodePipeline_FullAccess
+        - arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess
+        - arn:aws:iam::aws:policy/AWSCodeCommitFullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Path: /
+      RoleName: !Sub ${ProjectPrefix}CodePipelineRole
